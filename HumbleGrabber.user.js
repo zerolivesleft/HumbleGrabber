@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HumbleGrabber
 // @namespace    https://github.com/zerolivesleft/HumbleGrabber
-// @version      1.0.0
+// @version      1.0.1
 // @description  Easily grab and manage your Humble Choice game keys
 // @author       zerolivesleft
 // @match        https://www.humblebundle.com/membership/*
