@@ -8,7 +8,7 @@
 // @exclude      https://www.humblebundle.com/membership/home
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=humblebundle.com
 // @require      http://code.jquery.com/jquery-3.4.1.min.js
-// @grant        none
+// @grant        GM_xmlhttpRequest
 // @license      MIT
 // @homepage     https://github.com/zerolivesleft/HumbleGrabber
 // @supportURL   https://github.com/zerolivesleft/HumbleGrabber/issues
@@ -27,60 +27,126 @@
  * - Go to Steam's key redemption page
  */
 
+// Steam API key - you'll need to get your own from https://steamcommunity.com/dev/apikey
+const STEAM_API_KEY = 'YOUR_STEAM_API_KEY';
+
 // function that copies the passed in string to the clipboard
 function copyToClipboard(keys) {
     navigator.clipboard.writeText(keys);
-  }
-  
-  function keyCheck(keysString) {
+}
+
+function keyCheck(keysString) {
     // if keysString is empty then return "No keys found"
     if (keysString == "") {
-      return "No keys found";
+        return "No keys found";
     } else return keysString;
-  }
-  
-  async function getKeys(contentChoices) {
+}
+
+// Function to get Steam ID from profile URL
+async function getSteamId() {
+    return new Promise((resolve) => {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: "https://store.steampowered.com/account/",
+            onload: function(response) {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(response.responseText, "text/html");
+                const profileLink = doc.querySelector('.account_dropdown_link');
+                if (profileLink) {
+                    const steamId = profileLink.href.match(/\/profiles\/(\d+)/)[1];
+                    resolve(steamId);
+                } else {
+                    resolve(null);
+                }
+            }
+        });
+    });
+}
+
+// Function to check if a game is owned on Steam
+async function checkSteamOwnership(appId, steamId) {
+    return new Promise((resolve) => {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: `https://api.steampowered.com/IPlayerService/IsPlayingSharedGame/v1/?key=${STEAM_API_KEY}&steamid=${steamId}&appid_playing=${appId}`,
+            onload: function(response) {
+                const data = JSON.parse(response.responseText);
+                resolve(data.response.lender_steamid === "0");
+            }
+        });
+    });
+}
+
+// Function to get Steam App ID from game title
+async function getSteamAppId(gameTitle) {
+    return new Promise((resolve) => {
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: `https://api.steampowered.com/ISteamApps/GetAppList/v2/`,
+            onload: function(response) {
+                const data = JSON.parse(response.responseText);
+                const app = data.applist.apps.find(app => 
+                    app.name.toLowerCase() === gameTitle.toLowerCase()
+                );
+                resolve(app ? app.appid : null);
+            }
+        });
+    });
+}
+
+async function getKeys(contentChoices) {
     const keys = [];
+    const steamId = await getSteamId();
+    
     for (choice of contentChoices) {
-      let modalOpener = choice.querySelector(".js-open-choice-modal");
-      modalOpener.click();
-      const modal = document.querySelector(".choice-modal.humblemodal-wrapper");
-      const title = modal.querySelector(".js-admin-edit").innerText;
-      // use jquery to get the steam button by innerText and class is .js-keyfield.keyfield.enabled
-      let steamButton = $(modal).find(
-        '.js-keyfield.keyfield.enabled:contains("Get game on Steam") , a:contains("Steam")'
-      )[0];
-      if (steamButton != undefined) {
-        if (steamButton.innerText == "Steam") {
-          steamButton.click();
-          console.log("Selecting Steam for redemption");
+        let modalOpener = choice.querySelector(".js-open-choice-modal");
+        modalOpener.click();
+        const modal = document.querySelector(".choice-modal.humblemodal-wrapper");
+        const title = modal.querySelector(".js-admin-edit").innerText;
+        
+        // Get Steam App ID and check ownership
+        const appId = await getSteamAppId(title);
+        let ownershipStatus = "";
+        if (appId && steamId) {
+            const isOwned = await checkSteamOwnership(appId, steamId);
+            ownershipStatus = isOwned ? " (Already owned on Steam)" : " (Not owned on Steam)";
         }
-        // redefine steamButton after clicking it
-        steamButton = $(modal).find(
-          '.js-keyfield.keyfield.enabled:contains("Get game on Steam") , a:contains("Steam")'
+
+        // use jquery to get the steam button by innerText and class is .js-keyfield.keyfield.enabled
+        let steamButton = $(modal).find(
+            '.js-keyfield.keyfield.enabled:contains("Get game on Steam") , a:contains("Steam")'
         )[0];
-        // if steamButton innerText is "Get game on Steam" then click it
-        if (steamButton.innerText == "GET GAME ON STEAM") {
-          console.log(`Getting ${title} on Steam`);
-          steamButton.click();
-          // wait for key to load
-          await new Promise((r) => setTimeout(r, 3000));
-  
-          const keySection = modal.querySelector(
-            ".js-keyfield.keyfield.redeemed.enabled"
-          );
-          // get the key using jquery it's in a div with the class .keyfield-value
-          const key = $(keySection).find(".keyfield-value")[0].innerText;
-          keys.push(key);
+        if (steamButton != undefined) {
+            if (steamButton.innerText == "Steam") {
+                steamButton.click();
+                console.log("Selecting Steam for redemption");
+            }
+            // redefine steamButton after clicking it
+            steamButton = $(modal).find(
+                '.js-keyfield.keyfield.enabled:contains("Get game on Steam") , a:contains("Steam")'
+            )[0];
+            // if steamButton innerText is "Get game on Steam" then click it
+            if (steamButton.innerText == "GET GAME ON STEAM") {
+                console.log(`Getting ${title} on Steam`);
+                steamButton.click();
+                // wait for key to load
+                await new Promise((r) => setTimeout(r, 3000));
+
+                const keySection = modal.querySelector(
+                    ".js-keyfield.keyfield.redeemed.enabled"
+                );
+                // get the key using jquery it's in a div with the class .keyfield-value
+                const key = $(keySection).find(".keyfield-value")[0].innerText;
+                keys.push(`${title}${ownershipStatus}: ${key}`);
+            }
+        } else {
+            console.log("No Steam button found");
         }
-      } else {
-        console.log("No Steam button found");
-      }
-  
-      await new Promise((r) => setTimeout(r, 1000));
-      const xMark = modal.querySelector(".hb.hb-times");
-      xMark.click();
-      await new Promise((r) => setTimeout(r, 500));
+
+        await new Promise((r) => setTimeout(r, 1000));
+        const xMark = modal.querySelector(".hb.hb-times");
+        xMark.click();
+        await new Promise((r) => setTimeout(r, 500));
     }
     // write keys into a single string with newlines
     const keysString = keys.join("\n");
@@ -175,7 +241,7 @@ function copyToClipboard(keys) {
         </div>
       </div>
     </div>
-  
+
     `;
     // add keysModal to the body
     $("body").prepend(keysModal);
@@ -191,55 +257,55 @@ function copyToClipboard(keys) {
       console.log(finalKeyString);
       copyToClipboard(finalKeyString);
     });
-  }
-  
-  window.addEventListener(
+}
+
+window.addEventListener(
     "load",
     function () {
-      // Create container for buttons
-      const buttonContainer = document.createElement("div");
-      buttonContainer.style.display = "flex";
-      buttonContainer.style.gap = "10px";
-      buttonContainer.style.marginBottom = "10px";
+        // Create container for buttons
+        const buttonContainer = document.createElement("div");
+        buttonContainer.style.display = "flex";
+        buttonContainer.style.gap = "10px";
+        buttonContainer.style.marginBottom = "10px";
 
-      // Create button for unredeemed keys
-      const unredeemedButton = document.createElement("a");
-      const unredeemedText = document.createTextNode("GET UNREDEEMED KEYS");
-      unredeemedButton.style.cursor = "pointer";
-      unredeemedButton.appendChild(unredeemedText);
-      unredeemedButton.setAttribute("id", "getUnredeemedKeys");
-      unredeemedButton.setAttribute("class", "choices-secondary-link");
-      unredeemedButton.style.userSelect = "none";
-      unredeemedButton.style.flex = "1";
+        // Create button for unredeemed keys
+        const unredeemedButton = document.createElement("a");
+        const unredeemedText = document.createTextNode("GET UNREDEEMED KEYS");
+        unredeemedButton.style.cursor = "pointer";
+        unredeemedButton.appendChild(unredeemedText);
+        unredeemedButton.setAttribute("id", "getUnredeemedKeys");
+        unredeemedButton.setAttribute("class", "choices-secondary-link");
+        unredeemedButton.style.userSelect = "none";
+        unredeemedButton.style.flex = "1";
 
-      // Create button for all keys (including redeemed)
-      const allKeysButton = document.createElement("a");
-      const allKeysText = document.createTextNode("GET ALL KEYS");
-      allKeysButton.style.cursor = "pointer";
-      allKeysButton.appendChild(allKeysText);
-      allKeysButton.setAttribute("id", "getAllKeys");
-      allKeysButton.setAttribute("class", "choices-secondary-link");
-      allKeysButton.style.userSelect = "none";
-      allKeysButton.style.flex = "1";
+        // Create button for all keys (including redeemed)
+        const allKeysButton = document.createElement("a");
+        const allKeysText = document.createTextNode("GET ALL KEYS");
+        allKeysButton.style.cursor = "pointer";
+        allKeysButton.appendChild(allKeysText);
+        allKeysButton.setAttribute("id", "getAllKeys");
+        allKeysButton.setAttribute("class", "choices-secondary-link");
+        allKeysButton.style.userSelect = "none";
+        allKeysButton.style.flex = "1";
 
-      // Add event listeners
-      unredeemedButton.addEventListener("click", function () {
-        const unredeemedChoices = document.querySelectorAll(".content-choice:not(.claimed)");
-        getKeys(unredeemedChoices);
-      });
+        // Add event listeners
+        unredeemedButton.addEventListener("click", function () {
+            const unredeemedChoices = document.querySelectorAll(".content-choice:not(.claimed)");
+            getKeys(unredeemedChoices);
+        });
 
-      allKeysButton.addEventListener("click", function () {
-        const allChoices = document.querySelectorAll(".content-choice");
-        getKeys(allChoices);
-      });
+        allKeysButton.addEventListener("click", function () {
+            const allChoices = document.querySelectorAll(".content-choice");
+            getKeys(allChoices);
+        });
 
-      // Add buttons to container
-      buttonContainer.appendChild(unredeemedButton);
-      buttonContainer.appendChild(allKeysButton);
+        // Add buttons to container
+        buttonContainer.appendChild(unredeemedButton);
+        buttonContainer.appendChild(allKeysButton);
 
-      const header = document.querySelector(".content-choices-header");
-      header.appendChild(buttonContainer);
+        const header = document.querySelector(".content-choices-header");
+        header.appendChild(buttonContainer);
     },
     false
-  );
+);
   
